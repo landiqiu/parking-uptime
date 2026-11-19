@@ -27,8 +27,7 @@ jobs:
         id: hc
         run: |
           echo "== 基准：baidu =="
-          curl -s -o /dev/null -w 'baidu %{http_code}
-' --max-time 10 https://www.baidu.com || true
+          curl -s -o /dev/null -w 'baidu %{http_code}\n' --max-time 10 https://www.baidu.com || true
 
           echo "== 解析域名（阿里 DoH）=="
           ip=$(curl -s --max-time 10 'https://dns.alidns.com/resolve?name=3109999.cc&type=A' | jq -r '.Answer[0].data // empty')
