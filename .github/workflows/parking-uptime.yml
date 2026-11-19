@@ -26,7 +26,12 @@ jobs:
       - name: 健康检查
         id: hc
         run: |
-          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://3109999.cc:8443/api/health || true)
+          echo "== 基准：baidu =="
+          curl -s -o /dev/null -w 'baidu %{http_code}\n' --max-time 10 https://www.baidu.com || true
+          echo "== 目标 =="
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 20 https://3109999.cc:8443/api/health 2>/tmp/curl.err || true)
+          echo "curl 错误输出："
+          cat /tmp/curl.err || true
           echo "HTTP 状态码: $code"
           if [ "$code" = "200" ]; then
             echo "ok=true" >> "$GITHUB_OUTPUT"
