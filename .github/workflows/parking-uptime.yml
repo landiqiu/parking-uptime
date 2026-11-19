@@ -1,0 +1,84 @@
+name: parking-uptime
+
+# 外部拨测：每 5 分钟从公网检查一次停车系统入口。
+# 失败时通过 PushPlus 推送，并在本仓库开一个告警 Issue；
+# 恢复时关闭 Issue 并推一条恢复消息。
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: parking-uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 健康检查
+        id: hc
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 https://3109999.cc:8443/api/health || true)
+          echo "HTTP 状态码: $code"
+          if [ "$code" = "200" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "code=$code" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 确保告警标签存在
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create parking-alert --color B60205 --description "停车系统公网不可达" 2>/dev/null || true
+
+      - name: 统计未关闭的告警
+        id: open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh issue list --label parking-alert --state open --json number --jq 'length')
+          echo "未关闭告警: $n"
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+
+      - name: 告警（推送 + 开工单）
+        if: steps.hc.outputs.ok == 'false' && steps.open.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          ts=$(date -u '+%Y-%m-%d %H:%M UTC')
+          content=$(printf '【停车系统公网不可达】\n时间：%s\nHTTP：%s\n地址：https://3109999.cc:8443/api/health\n\n可能是 Proxmox、nginx、路由器或宽带故障。' "$ts" "${{ steps.hc.outputs.code }}")
+          jq -n --arg token "$PUSHPLUS_TOKEN" \
+                --arg title "停车系统公网不可达" \
+                --arg content "$content" \
+                '{token:$token,title:$title,content:$content,template:"txt"}' \
+            | curl -s -X POST https://www.pushplus.plus/send \
+                   -H 'Content-Type: application/json' -d @-
+          gh issue create \
+            --title "公网不可达 $ts" \
+            --label parking-alert \
+            --body "$content"
+
+      - name: 恢复（关工单 + 推送）
+        if: steps.hc.outputs.ok == 'true' && steps.open.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          ts=$(date -u '+%Y-%m-%d %H:%M UTC')
+          content=$(printf '【停车系统恢复】\n时间：%s\n公网健康检查已恢复 HTTP 200。' "$ts")
+          gh issue list --label parking-alert --state open --json number --jq '.[].number' \
+            | while read -r n; do gh issue close "$n" --comment "已恢复 $ts"; done
+          jq -n --arg token "$PUSHPLUS_TOKEN" \
+                --arg title "停车系统恢复" \
+                --arg content "$content" \
+                '{token:$token,title:$title,content:$content,template:"txt"}' \
+            | curl -s -X POST https://www.pushplus.plus/send \
+                   -H 'Content-Type: application/json' -d @-
